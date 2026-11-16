@@ -43,108 +43,100 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    /* Hintergrund */
-    .stApp {
-        background-color: #df1238;
-    }
 
-    [data-testid="stHeader"] {
-        background-color: #df1238;
-    }
+/* Hauptfarben */
+:root {
+    --red: #920D30;
+    --dark-red: #700A24;
+    --light-red: #F8E9ED;
+    --anthracite: #343434;
+}
 
-    [data-testid="stMain"] {
-        background-color: #df1238;
-    }
+/* Hintergrund */
+.stApp {
+    background-color: #F8F5F6;
+    color: var(--anthracite);
+}
 
-    [data-testid="stMainBlockContainer"] {
-        max-width: 560px;
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-    }
+/* Hauptbereich */
+section.main {
+    background-color: #F8F5F6;
+}
 
-    /* Schrift */
-    html, body, [class*="st-"] {
-        font-family: Arial, sans-serif;
-    }
+/* Kopfbereich */
+section.main > div {
+    padding-top: 2rem;
+}
 
-    h1, h2, h3, p, label {
-        color: white !important;
-    }
+/* Seitenleiste in Dunkelrot */
+section[data-testid="stSidebar"] {
+    background-color: #920D30;
+    border-right: none;
+}
 
-    h1 {
-        text-align: center;
-        font-size: 27px !important;
-        font-weight: 500 !important;
-    }
+section[data-testid="stSidebar"] * {
+    color: white !important;
+}
 
-    h2, h3 {
-        text-align: center;
-    }
+/* Überschriften */
+h1, h2, h3 {
+    color: #920D30 !important;
+    font-weight: 650;
+}
 
-    /* Kamera */
-    [data-testid="stCameraInput"] {
-        background: #c9c9c9;
-        border-radius: 18px;
-        padding: 12px;
-    }
+/* Karten und Container */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+    background-color: white;
+    border-radius: 12px;
+}
 
-    [data-testid="stCameraInput"] button {
-        border-radius: 8px;
-    }
+/* Buttons */
+.stButton > button {
+    background-color: #920D30;
+    color: white;
+    border: 1px solid #920D30;
+    border-radius: 9px;
+    font-weight: 600;
+    transition: 0.2s;
+}
 
-    /* Buttons */
-    .stButton > button {
-        background-color: white;
-        color: #222222;
-        border: none;
-        border-radius: 8px;
-        font-size: 16px;
-        min-height: 42px;
-        width: 100%;
-    }
+.stButton > button:hover {
+    background-color: #700A24;
+    border-color: #700A24;
+    color: white;
+}
 
-    .stButton > button:hover {
-        background-color: #eeeeee;
-        color: #222222;
-        border: none;
-    }
+/* Datei-Upload */
+[data-testid="stFileUploader"] {
+    background-color: #F8E9ED;
+    border: 2px dashed #920D30;
+    border-radius: 12px;
+    padding: 12px;
+}
 
-    /* Checkbox */
-    [data-testid="stCheckbox"] label {
-        color: white !important;
-    }
+/* Eingabefelder */
+input, textarea {
+    border-radius: 8px !important;
+}
 
-    /* Hinweisfeld */
-    .hinweis {
-        background-color: #c9c9c9;
-        color: #222222;
-        padding: 17px;
-        border-radius: 15px;
-        text-align: center;
-        margin: 12px 0;
-    }
+/* Fortschrittsanzeigen */
+.stProgress > div > div > div {
+    background-color: #920D30;
+}
 
-    .hinweis p {
-        color: #222222 !important;
-        margin: 0;
-    }
+/* Auswahlfelder */
+.stSelectbox, .stNumberInput {
+    border-radius: 8px;
+}
 
-    /* Fortschritt */
-    [data-testid="stProgressBar"] > div > div {
-        background-color: white;
-    }
+/* Trennlinien */
+hr {
+    border-color: #E6CDD4;
+}
 
-    /* Fußzeile und Menü ausblenden */
-    #MainMenu, footer {
-        visibility: hidden;
-    }
-
-    @media (max-width: 600px) {
-        [data-testid="stMainBlockContainer"] {
-            padding: 1rem 1rem 2rem 1rem;
-        }
-    }
 </style>
+""", unsafe_allow_html=True)
+
 """, unsafe_allow_html=True)
 
 
