@@ -1,311 +1,602 @@
-from __future__ import annotations
 
-from datetime import datetime, date
-from zoneinfo import ZoneInfo
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import sqlite3
 import hashlib
 
-import numpy as np
 import streamlit as st
+import numpy as np
 from PIL import Image
+import tensorflow as tf
 
-from modules.classifier import TeachableMachineClassifier
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "data" / "raumkontrolle.db"
-SCHOOL_TIMEZONE = ZoneInfo("Europe/Berlin")
+# =====================================================
+# 1. GRUNDEINSTELLUNGEN
+# =====================================================
 
-def today_key():
-    return datetime.now(SCHOOL_TIMEZONE).date().isoformat()
+BASE = Path(__file__).resolve().parent
+TZ = ZoneInfo("Europe/Berlin")
+DB = BASE / "data" / "raumkontrolle.db"
+
+ROOMS = ["Raum 174", "Raum 204"]
+
+ROOM_MODEL = BASE / "models" / "room" / "keras_model.h5"
+ROOM_LABELS = BASE / "models" / "room" / "labels.txt"
+
+CHAIR_MODEL = BASE / "models" / "chairs" / "keras_model.h5"
+CHAIR_LABELS = BASE / "models" / "chairs" / "labels.txt"
+
+LOGO = BASE / "logo.png"
 
 st.set_page_config(
     page_title="Raumkontrolle",
     page_icon="🏫",
     layout="centered",
+    initial_sidebar_state="collapsed"
 )
 
-# Die beiden Testräume können hier später erweitert werden.
-ROOMS = ["Raum 174", "Raum 204"]
 
-# Modell-Konfiguration
-ROOM_MODEL_PATH = BASE_DIR / "models" / "room" / "keras_model.h5"
-ROOM_LABELS_PATH = BASE_DIR / "models" / "room" / "labels.txt"
-CHAIR_MODEL_PATH = BASE_DIR / "models" / "chairs" / "keras_model.h5"
-CHAIR_LABELS_PATH = BASE_DIR / "models" / "chairs" / "labels.txt"
+# =====================================================
+# 2. DESIGN
+# =====================================================
 
-# -------------------- Datenbank --------------------
+st.markdown("""
+<style>
+    /* Hintergrund */
+    .stApp {
+        background-color: #df1238;
+    }
+
+    [data-testid="stHeader"] {
+        background-color: #df1238;
+    }
+
+    [data-testid="stMain"] {
+        background-color: #df1238;
+    }
+
+    [data-testid="stMainBlockContainer"] {
+        max-width: 560px;
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+
+    /* Schrift */
+    html, body, [class*="st-"] {
+        font-family: Arial, sans-serif;
+    }
+
+    h1, h2, h3, p, label {
+        color: white !important;
+    }
+
+    h1 {
+        text-align: center;
+        font-size: 27px !important;
+        font-weight: 500 !important;
+    }
+
+    h2, h3 {
+        text-align: center;
+    }
+
+    /* Kamera */
+    [data-testid="stCameraInput"] {
+        background: #c9c9c9;
+        border-radius: 18px;
+        padding: 12px;
+    }
+
+    [data-testid="stCameraInput"] button {
+        border-radius: 8px;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        background-color: white;
+        color: #222222;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        min-height: 42px;
+        width: 100%;
+    }
+
+    .stButton > button:hover {
+        background-color: #eeeeee;
+        color: #222222;
+        border: none;
+    }
+
+    /* Checkbox */
+    [data-testid="stCheckbox"] label {
+        color: white !important;
+    }
+
+    /* Hinweisfeld */
+    .hinweis {
+        background-color: #c9c9c9;
+        color: #222222;
+        padding: 17px;
+        border-radius: 15px;
+        text-align: center;
+        margin: 12px 0;
+    }
+
+    .hinweis p {
+        color: #222222 !important;
+        margin: 0;
+    }
+
+    /* Fortschritt */
+    [data-testid="stProgressBar"] > div > div {
+        background-color: white;
+    }
+
+    /* Fußzeile und Menü ausblenden */
+    #MainMenu, footer {
+        visibility: hidden;
+    }
+
+    @media (max-width: 600px) {
+        [data-testid="stMainBlockContainer"] {
+            padding: 1rem 1rem 2rem 1rem;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
+
+
+# =====================================================
+# 3. LOGO UND HILFSFUNKTIONEN
+# =====================================================
+
+def show_logo():
+    if LOGO.exists():
+        left, center, right = st.columns([1, 4, 1])
+        with center:
+            st.image(str(LOGO), use_container_width=True)
+    else:
+        st.warning("Das Schullogo logo.png wurde nicht gefunden.")
+
 
 def get_connection():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return sqlite3.connect(DB_PATH, check_same_thread=False)
+    (BASE / "data").mkdir(exist_ok=True)
+    return sqlite3.connect(DB)
 
-def init_db():
-    with get_connection() as conn:
-        conn.execute("""
+
+def init_database():
+    with get_connection() as con:
+        con.execute("""
             CREATE TABLE IF NOT EXISTS checks (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 room TEXT NOT NULL,
                 check_date TEXT NOT NULL,
                 checked_at TEXT NOT NULL,
                 chair_status TEXT NOT NULL,
-                chair_confidence REAL NOT NULL,
                 photo_count INTEGER NOT NULL,
                 UNIQUE(room, check_date)
             )
         """)
-        conn.commit()
+        con.commit()
 
-def get_today_checks():
-    with get_connection() as conn:
-        rows = conn.execute(
-            """SELECT room, checked_at, chair_status, chair_confidence, photo_count
-               FROM checks WHERE check_date = ?""",
-            (today_key(),),
+
+def today():
+    return datetime.now(TZ).date().isoformat()
+
+
+def save_check(room, chair_status, photo_count):
+    now = datetime.now(TZ).isoformat(timespec="seconds")
+
+    with get_connection() as con:
+        con.execute("""
+            INSERT INTO checks
+            (room, check_date, checked_at, chair_status, photo_count)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(room, check_date)
+            DO UPDATE SET
+                checked_at=excluded.checked_at,
+                chair_status=excluded.chair_status,
+                photo_count=excluded.photo_count
+        """, (room, today(), now, chair_status, photo_count))
+        con.commit()
+
+
+def get_checked_rooms():
+    with get_connection() as con:
+        rows = con.execute(
+            "SELECT room FROM checks WHERE check_date=?",
+            (today(),)
         ).fetchall()
-    return {
-        row[0]: {
-            "checked_at": row[1],
-            "chair_status": row[2],
-            "chair_confidence": row[3],
-            "photo_count": row[4],
-        }
-        for row in rows
-    }
 
-def save_check(room, chair_status, chair_confidence, photo_count):
-    now = datetime.now(SCHOOL_TIMEZONE).isoformat(timespec="seconds")
-    with get_connection() as conn:
-        conn.execute(
-            """INSERT INTO checks
-               (room, check_date, checked_at, chair_status, chair_confidence, photo_count)
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(room, check_date) DO UPDATE SET
-                 checked_at=excluded.checked_at,
-                 chair_status=excluded.chair_status,
-                 chair_confidence=excluded.chair_confidence,
-                 photo_count=excluded.photo_count
-            """,
-            (
-                room,
-                today_key(),
-                now,
-                chair_status,
-                float(chair_confidence),
-                int(photo_count),
-            ),
-        )
-        conn.commit()
+    return [row[0] for row in rows]
 
-# -------------------- Modelle --------------------
+
+def parse_labels(path):
+    labels = []
+
+    with open(path, encoding="utf-8-sig") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+
+            parts = line.split(maxsplit=1)
+
+            if len(parts) == 2 and parts[0].isdigit():
+                labels.append(parts[1].strip())
+            else:
+                labels.append(line)
+
+    return labels
+
+
+def normalise_room(label):
+    text = label.lower()
+
+    if "174" in text:
+        return "Raum 174"
+
+    if "204" in text:
+        return "Raum 204"
+
+    return label
+
+
+# =====================================================
+# 4. KI-MODELLE
+# =====================================================
+
+def check_model_files():
+    missing = []
+
+    for path in [
+        ROOM_MODEL, ROOM_LABELS,
+        CHAIR_MODEL, CHAIR_LABELS
+    ]:
+        if not path.is_file():
+            missing.append(str(path.relative_to(BASE)))
+
+    return missing
+
 
 @st.cache_resource
-def load_models():
-    room_model = TeachableMachineClassifier(ROOM_MODEL_PATH, ROOM_LABELS_PATH)
-    chair_model = TeachableMachineClassifier(CHAIR_MODEL_PATH, CHAIR_LABELS_PATH)
-    return room_model, chair_model
+def load_model(model_path, labels_path):
+    model = tf.keras.models.load_model(
+        str(model_path),
+        compile=False
+    )
 
-def reset_capture():
+    labels = parse_labels(labels_path)
+
+    return model, labels
+
+
+def predict(model, labels, image):
+    image = image.convert("RGB").resize((224, 224))
+
+    array = np.asarray(image, dtype=np.float32)
+    array = (array / 127.5) - 1.0
+    array = np.expand_dims(array, axis=0)
+
+    result = model.predict(array, verbose=0)[0]
+
+    if len(result) != len(labels):
+        raise ValueError("Die Anzahl der KI-Ausgabewerte stimmt nicht mit den Labels überein.")
+
+    probabilities = {
+        label: float(result[i])
+        for i, label in enumerate(labels)
+    }
+
+    best = int(np.argmax(result))
+
+    return {
+        "label": labels[best],
+        "confidence": float(result[best]),
+        "probabilities": probabilities
+    }
+
+
+# =====================================================
+# 5. SESSION STATE
+# =====================================================
+
+defaults = {
+    "stage": "capture",
+    "photos": [],
+    "active_room": None,
+    "camera_key": 0,
+    "seen_hashes": set(),
+    "notice": "",
+    "chair_result": None,
+}
+
+for key, value in defaults.items():
+    if key not in st.session_state:
+        st.session_state[key] = value
+
+
+def reset_app():
+    st.session_state.stage = "capture"
     st.session_state.photos = []
-    st.session_state.capture_key += 1
     st.session_state.active_room = None
-    st.session_state.saved = False
+    st.session_state.camera_key += 1
     st.session_state.seen_hashes = set()
+    st.session_state.notice = ""
+    st.session_state.chair_result = None
 
-init_db()
 
-st.title("🏫 Raumkontrolle")
-st.caption("Bitte fotografieren Sie den Raum aus mehreren Perspektiven.")
+# =====================================================
+# 6. STARTSEITE
+# =====================================================
 
-# Einstellungen für den Prototyp. Die Werte können später angepasst werden.
-with st.sidebar:
-    st.header("Erkennung")
-    min_photos = st.number_input("Mindestens benötigte Fotos", min_value=2, max_value=6, value=2, step=1)
-    confidence_threshold = st.slider(
-        "Mindest-Sicherheit der Stuhlerkennung",
-        min_value=0.50,
-        max_value=0.99,
-        value=0.85,
-        step=0.01,
-    )
-    agreement_threshold = st.slider(
-        "Übereinstimmung zwischen Fotos",
-        min_value=0.50,
-        max_value=1.00,
-        value=0.75,
-        step=0.05,
-    )
-    room_threshold = st.slider(
-        "Mindest-Sicherheit der Raumerkennung",
-        min_value=0.50,
-        max_value=0.99,
-        value=0.70,
-        step=0.01,
-    )
-    st.caption("Diese Schwellenwerte sind Startwerte und sollten mit echten Testfotos überprüft werden.")
+init_database()
+show_logo()
 
-st.subheader("Tagesübersicht")
-today_checks = get_today_checks()
+if st.session_state.stage == "capture":
 
-cols = st.columns(len(ROOMS))
-for col, room in zip(cols, ROOMS):
-    with col:
-        if room in today_checks:
-            st.success(f"**{room}**\n\nKontrolliert")
-            st.caption(today_checks[room]["checked_at"].split("T")[-1])
-        else:
-            st.warning(f"**{room}**\n\nNoch offen")
+    st.title("Raumkontrolle")
 
-st.divider()
-st.subheader("Raum kontrollieren")
+    st.markdown("""
+    <div class="hinweis">
+        <p>Bitte nehmen Sie Fotos entsprechend der
+        Abbildung im Raum auf.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-try:
-    room_classifier, chair_classifier = load_models()
-except Exception as exc:
-    st.error("Die KI-Modelle konnten nicht geladen werden.")
-    st.exception(exc)
-    st.stop()
+    missing = check_model_files()
 
-if "photos" not in st.session_state:
-    st.session_state.photos = []
-if "capture_key" not in st.session_state:
-    st.session_state.capture_key = 0
-if "active_room" not in st.session_state:
-    st.session_state.active_room = None
-if "saved" not in st.session_state:
-    st.session_state.saved = False
+    if missing:
+        st.error("Die KI-Modelle wurden nicht gefunden.")
+        st.write("Bitte überprüfen Sie die Dateien in Ihrem GitHub-Repository:")
 
-if st.session_state.saved:
-    st.success("Die Raumkontrolle wurde gespeichert. Vielen Dank!")
-    if st.button("Nächsten Raum kontrollieren"):
-        reset_capture()
-        st.rerun()
-else:
-    st.info(
-        "Nehmen Sie mindestens zwei Fotos aus unterschiedlichen Perspektiven auf. "
-        "Die Fotos werden nur zur Auswertung verwendet und nicht dauerhaft gespeichert."
-    )
+        for item in missing:
+            st.code(item)
+
+        st.info(
+            "Die Dateien müssen in den angegebenen Ordnern liegen. "
+            "Achten Sie auf die genaue Schreibweise."
+        )
+        st.stop()
+
+    try:
+        room_model, room_labels = load_model(
+            ROOM_MODEL, ROOM_LABELS
+        )
+
+        chair_model, chair_labels = load_model(
+            CHAIR_MODEL, CHAIR_LABELS
+        )
+
+    except Exception:
+        st.error(
+            "Die KI-Modelle konnten nicht geladen werden. "
+            "Bitte überprüfen Sie die Modell- und Labeldateien."
+        )
+        st.stop()
+
+    if st.session_state.notice:
+        st.warning(st.session_state.notice)
 
     photo = st.camera_input(
         "Foto aufnehmen",
-        key=f"camera_{st.session_state.capture_key}",
+        key=f"camera_{st.session_state.camera_key}"
     )
 
     if photo is not None:
-        raw_bytes = photo.getvalue()
-        digest = hashlib.sha256(raw_bytes).hexdigest()
-        seen = st.session_state.get("seen_hashes", set())
+        image_bytes = photo.getvalue()
+        digest = hashlib.sha256(image_bytes).hexdigest()
 
-        if digest not in seen:
+        if digest not in st.session_state.seen_hashes:
+
             try:
                 image = Image.open(photo).convert("RGB")
-                room_result = room_classifier.predict(image)
-                chair_result = chair_classifier.predict(image)
 
-                detected_room, room_conf = room_result["label"], room_result["confidence"]
+                room_result = predict(
+                    room_model, room_labels, image
+                )
+
+                chair_result = predict(
+                    chair_model, chair_labels, image
+                )
+
+                detected_room = normalise_room(
+                    room_result["label"]
+                )
 
                 if detected_room not in ROOMS:
-                    st.error(f"Das Modell hat einen unbekannten Raum erkannt: {detected_room}")
-                elif room_conf < room_threshold:
-                    st.warning(
-                        f"Der Raum wurde nicht sicher erkannt "
-                        f"({detected_room}, {room_conf:.0%}). Bitte erneut fotografieren."
+                    st.session_state.notice = (
+                        "Der Raum konnte nicht eindeutig erkannt werden. "
+                        "Bitte fotografieren Sie erneut."
                     )
-                elif st.session_state.active_room and detected_room != st.session_state.active_room:
-                    st.error(
-                        f"Dieses Foto scheint {detected_room} zu zeigen. "
-                        f"Die bisherige Kontrolle betrifft {st.session_state.active_room}. "
-                        "Bitte starten Sie eine neue Kontrolle."
+
+                elif room_result["confidence"] < 0.70:
+                    st.session_state.notice = (
+                        "Die Raumerkennung ist unsicher. "
+                        "Bitte nehmen Sie ein neues Foto auf."
                     )
+
+                elif (
+                    st.session_state.active_room is not None
+                    and detected_room != st.session_state.active_room
+                ):
+                    st.session_state.notice = (
+                        "Auf dem Foto wurde ein anderer Raum erkannt. "
+                        "Bitte beginnen Sie eine neue Kontrolle."
+                    )
+
                 else:
                     st.session_state.active_room = detected_room
                     st.session_state.photos.append({
                         "room": detected_room,
-                        "room_confidence": room_conf,
+                        "room_confidence": room_result["confidence"],
                         "chair_label": chair_result["label"],
                         "chair_confidence": chair_result["confidence"],
-                        "chair_probabilities": chair_result["probabilities"],
+                        "chair_probabilities": chair_result["probabilities"]
                     })
-                    seen.add(digest)
-                    st.session_state.seen_hashes = seen
-                    st.session_state.capture_key += 1
-                    st.rerun()
 
-            except Exception as exc:
-                st.error("Das Foto konnte nicht ausgewertet werden.")
-                st.exception(exc)
+                    st.session_state.seen_hashes.add(digest)
+                    st.session_state.notice = ""
+
+                st.session_state.camera_key += 1
+                st.rerun()
+
+            except Exception:
+                st.error(
+                    "Das Foto konnte nicht ausgewertet werden. "
+                    "Bitte versuchen Sie es erneut."
+                )
 
     photos = st.session_state.photos
 
     if photos:
-        st.markdown(f"**Erkannter Raum: {st.session_state.active_room}**")
-        st.write(f"Aufgenommene Fotos: **{len(photos)}**")
+        st.markdown(
+            f"<div class='hinweis'><p>Erkannter Raum: "
+            f"<b>{st.session_state.active_room}</b></p></div>",
+            unsafe_allow_html=True
+        )
 
-        for index, result in enumerate(photos, start=1):
+        st.write(f"Aufgenommene Fotos: {len(photos)}")
+
+        for i, result in enumerate(photos, 1):
             st.caption(
-                f"Foto {index}: Stühle: {result['chair_label']} "
-                f"({result['chair_confidence']:.0%}) · "
-                f"Raum-Sicherheit: {result['room_confidence']:.0%}"
+                f"Foto {i}: Stühle: {result['chair_label']} "
+                f"({result['chair_confidence']:.0%})"
             )
 
-        # Mittelwert der Wahrscheinlichkeiten über alle Fotos bilden.
-        labels = chair_classifier.labels
+        # Wahrscheinlichkeiten über alle Fotos mitteln
         avg_probs = {}
-        for label in labels:
+
+        for label in chair_labels:
             avg_probs[label] = float(np.mean([
-                p["chair_probabilities"].get(label, 0.0) for p in photos
+                p["chair_probabilities"].get(label, 0)
+                for p in photos
             ]))
 
         best_label = max(avg_probs, key=avg_probs.get)
-        mean_confidence = avg_probs[best_label]
-        agreement = sum(p["chair_label"] == best_label for p in photos) / len(photos)
+        confidence = avg_probs[best_label]
 
-        st.markdown("**Zusammengeführte Stuhlerkennung**")
-        for label, probability in avg_probs.items():
-            st.write(f"{label}: **{probability:.0%}**")
-            st.progress(min(max(probability, 0.0), 1.0))
+        agreement = sum(
+            p["chair_label"] == best_label
+            for p in photos
+        ) / len(photos)
 
-        enough_photos = len(photos) >= min_photos
-        confidence_ok = mean_confidence >= confidence_threshold
-        agreement_ok = agreement >= agreement_threshold
-        ready = enough_photos and confidence_ok and agreement_ok
+        enough_photos = len(photos) >= 2
+        confidence_ok = confidence >= 0.85
+        agreement_ok = agreement >= 0.75
 
-        if ready:
-            st.success(
-                f"Stühle ausreichend sicher erkannt: {best_label} "
-                f"({mean_confidence:.0%}; Übereinstimmung {agreement:.0%})."
-            )
-            st.warning(
-                "Die Fenstererkennung ist noch nicht integriert. "
-                "Bitte prüfen Sie die Fenster vor dem Speichern selbst."
-            )
-            if st.button("Raumkontrolle speichern", type="primary", use_container_width=True):
-                save_check(
-                    st.session_state.active_room,
-                    best_label,
-                    mean_confidence,
-                    len(photos),
-                )
-                st.session_state.saved = True
+        if enough_photos and confidence_ok and agreement_ok:
+
+            label_text = best_label.lower()
+
+            if "oben" in label_text or "hoch" in label_text:
+                st.session_state.chair_result = best_label
+
+                st.session_state.stage = "confirm"
                 st.rerun()
-        else:
-            reasons = []
-            if not enough_photos:
-                reasons.append(f"Es werden mindestens {int(min_photos)} Fotos benötigt.")
-            if not confidence_ok:
-                reasons.append("Die Stuhlerkennung ist noch nicht sicher genug.")
-            if not agreement_ok:
-                reasons.append("Die Ergebnisse der Fotos stimmen noch nicht ausreichend überein.")
-            st.warning("Bitte nehmen Sie ein weiteres Foto aus einer anderen Perspektive auf. " + " ".join(reasons))
 
-        if st.button("Aufnahme verwerfen und neu beginnen"):
-            reset_capture()
-            st.session_state.seen_hashes = set()
+            else:
+                st.error(
+                    "Die Stühle sind noch nicht hochgestellt. "
+                    "Bitte korrigieren Sie dies und fotografieren Sie erneut."
+                )
+
+                if st.button("Erneut fotografieren"):
+                    reset_app()
+                    st.rerun()
+
+        else:
+            st.info(
+                "Bitte nehmen Sie ein weiteres Foto aus einer "
+                "anderen Perspektive auf, bis die Erkennung ausreichend sicher ist."
+            )
+
+        if st.button("Zurück / Aufnahme neu beginnen"):
+            reset_app()
             st.rerun()
 
-st.divider()
-st.caption(
-    "Hinweis: Diese erste Version erkennt keine Personen und kann daher nicht prüfen, "
-    "ob sich noch jemand im Raum befindet. Bitte nur leere Räume fotografieren. "
-    "Die Lehrkraft muss Fenster und andere noch nicht integrierte Kategorien selbst kontrollieren."
-)
+
+# =====================================================
+# 7. RAUMBESTÄTIGUNG
+# =====================================================
+
+elif st.session_state.stage == "confirm":
+
+    st.title("Raumkontrolle")
+
+    room = st.session_state.active_room
+
+    st.markdown(
+        f"""
+        <div class="hinweis">
+            <p style="font-size:22px;">
+                {room} bestätigen
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    confirmed = st.checkbox(
+        "Ich bestätige die Raumkontrolle."
+    )
+
+    if st.button("Bestätigen", disabled=not confirmed):
+        save_check(
+            room,
+            st.session_state.chair_result,
+            len(st.session_state.photos)
+        )
+
+        st.session_state.stage = "success"
+        st.rerun()
+
+    if st.button("Zurück"):
+        st.session_state.stage = "capture"
+        st.rerun()
+
+
+# =====================================================
+# 8. ERFOLGSANZEIGE
+# =====================================================
+
+elif st.session_state.stage == "success":
+
+    st.title("Raumkontrolle")
+
+    st.markdown("""
+    <div class="hinweis">
+        <p style="font-size:18px;">
+            Raum als ordentlich erkannt,
+            vielen Dank für die Unterstützung,
+            unsere Räume sauber zu halten!
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if st.button("Weitere Raumkontrolle"):
+        reset_app()
+        st.rerun()
+
+
+# =====================================================
+# 9. UNAUFDRINGLICHE TAGESÜBERSICHT
+# =====================================================
+
+with st.expander("Tagesübersicht"):
+
+    checked = get_checked_rooms()
+
+    for room in ROOMS:
+        if room in checked:
+            st.success(f"{room}: Kontrolliert")
+        else:
+            st.warning(f"{room}: Noch nicht kontrolliert")
+
+    st.caption(
+        "Die Übersicht zeigt nur den Kontrollstatus, "
+        "keine Namen von Lehrkräften."
+    )
+
