@@ -21,11 +21,11 @@ DB = BASE / "data" / "raumkontrolle.db"
 
 ROOMS = ["Raum 174", "Raum 204"]
 
-ROOM_MODEL = BASE / "models" / "room" / "keras_model.h5"
-ROOM_LABELS = BASE / "models" / "room" / "labels.txt"
+ROOM_MODEL = BASE / "models" / "room" / "r keras_model.h5"
+ROOM_LABELS = BASE / "models" / "room" / "r labels.txt"
 
-CHAIR_MODEL = BASE / "models" / "chairs" / "keras_model.h5"
-CHAIR_LABELS = BASE / "models" / "chairs" / "labels.txt"
+CHAIR_MODEL = BASE / "models" / "chairs" / "c keras_model.h5"
+CHAIR_LABELS = BASE / "models" / "chairs" / "c labels.txt"
 
 LOGO = BASE / "logo.png"
 
